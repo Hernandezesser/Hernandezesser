@@ -1,0 +1,258 @@
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+import os
+
+def download_and_save_data(api_url_sales, api_url_store, bearer_token, directory_path):
+    # Get the current date and determine the date range
+    today = datetime.today()
+
+    if today.day == 1:
+        last_day_of_previous_month = today.replace(day=1) - timedelta(days=1)
+        start_date = last_day_of_previous_month.replace(day=1).strftime('%Y%m%d')
+        end_date = last_day_of_previous_month.strftime('%Y%m%d')
+    else:
+        first_day_of_month = today.replace(day=1)
+        start_date = first_day_of_month.strftime('%Y%m%d')
+        end_date = (today - timedelta(days=1)).strftime('%Y%m%d')
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Content-Type": "application/json",
+    }
+
+    params_sales = {
+        "inicio": start_date,
+        "termino": end_date,
+    }
+
+    # Path to the master products Excel file
+    excel_path = r"F:\Embonor\EMBONOR\master products\master_products_embonor.xlsx"
+
+    try:
+        # Load the master products Excel file
+        df_master = pd.read_excel(excel_path)
+
+        # Download sales data
+        response_sales = requests.get(api_url_sales, headers=headers, params=params_sales)
+
+        if response_sales.status_code == 200:
+            data_sales = response_sales.json()
+            df_ventas = pd.DataFrame(data_sales)
+
+            # Select and rename columns from the sales API using provided names
+            df_selected = df_ventas.loc[:, [
+                "Fecha", 
+                "CodigoCliente", 
+                "CodigoArticulo", 
+                "Cantidad", 
+                "MontoTotalConImpuesto"
+            ]].copy()
+
+            df_selected.columns = [
+                "dimtiempo_date", 
+                "dimtiendas_numTienda", 
+                "dimproductos_upc", 
+                "vts_piezas", 
+                "vts_importe_real"
+            ]
+
+            # Convert specified columns to integers
+            numeric_columns = ["vts_piezas", "vts_importe_real"]
+            for col in numeric_columns:
+                df_selected[col] = df_selected[col].astype(int)
+                
+            print(df_selected.columns)    
+
+            # Download store data
+            response_store = requests.get(api_url_store, headers=headers)
+
+            if response_store.status_code == 200:
+                data_store = response_store.json()
+                df_stores = pd.DataFrame(data_store)
+                
+                # Convert 'dimtiendas_numTienda' and 'StoreCode' to integers for merge compatibility
+                df_selected['dimtiendas_numTienda'] = df_selected['dimtiendas_numTienda'].astype(int)
+                df_stores['StoreCode'] = df_stores['StoreCode'].astype(int)
+
+                # Merge to get store names using direct column names
+                df_combined = pd.merge(
+                    df_selected,
+                    df_stores[['StoreCode', 'StoreName']],
+                    left_on='dimtiendas_numTienda',
+                    right_on='StoreCode',
+                    how='left'
+                )
+
+                # Rename the merged column if necessary
+                df_combined.rename(columns={'StoreName': 'dimtiendas_nomTienda'}, inplace=True)
+                
+                # Drop extra 'StoreCode' column for cleanup
+                df_combined.drop(columns=['StoreCode'], inplace=True, errors='ignore')
+                
+                # Copy values from dimproductos_upc to dimproductos_numArticulo
+                df_combined['dimproductos_numArticulo'] = df_combined['dimproductos_upc']
+                
+                # Merge with master file to get dimproductos_clvCliente
+                df_combined = pd.merge(
+                    df_combined,
+                    df_master[['Distributor_SKU_Code', 'Diageo_SKU_Code']],
+                    left_on='dimproductos_upc',
+                    right_on='Distributor_SKU_Code',
+                    how='left'
+                )
+                
+                # Rename the merged column
+                df_combined.rename(columns={'Diageo_SKU_Code': 'dimproductos_clvCliente'}, inplace=True)
+                
+                # Drop extra 'Distributor_SKU_Code' column for cleanup
+                df_combined.drop(columns=['Distributor_SKU_Code'], inplace=True, errors='ignore')
+                
+                # Fill NaN with "0" if no match is found
+                df_combined['dimproductos_clvCliente'] = df_combined['dimproductos_clvCliente'].fillna("0")
+                
+                constant_values = {
+                    "id_dimcadena": "315973",
+                    "dimtiendas_cadenanombre": "Coca Cola Embonor S.A.",
+                    "dimproductos_oculto": "0",
+                    "hash_dimtiendas": "0",
+                    "dimtiendas_formato": "SIN ASIGNAR",
+                    "dimlineastiendas_CURT": "NULL",
+                    "moneda": "CLP",
+                    "vts_costo_real": "0",
+                    "vts_cajas": "0",
+                    "vts_ajuste_mensual": "FALSE",
+                    "vts_existencias_tienda_piezas": "0",
+                    "vts_existencias_transito_piezas": "0",
+                    "vts_existencias_cedis_piezas": "0",
+                    "vts_existencias_ordenado_piezas": "0",
+                    "id_canal": "0",
+                    "vts_existencias_transferencia_piezas": "0",
+                    "id_taxescase": "0",
+                    "vts_importe_real_wt": "0",
+                    "vts_importe_real_iva": "0",
+                    "vts_importe_real_ieps": "0",
+                    "vts_importe_real_wot": "0",
+                    "lpv": "NULL",
+                    "vts_lpv_wt": "NULL",
+                    "vts_lpv_iva": "NULL",
+                    "vts_lpv_ieps": "NULL",
+                    "vts_lpv_wot": "NULL",
+                    "vts_existencias_tienda_lpv_wt": "NULL",
+                    "vts_existencias_tienda_lpv_iva": "NULL",
+                    "vts_existencias_tienda_lpv_ieps": "NULL",
+                    "vts_existencias_tienda_lpv_wot": "NULL",
+                    "vts_gsv_wt": "NULL",
+                    "vts_gsv_iva": "NULL",
+                    "vts_gsv_ieps": "NULL",
+                    "vts_gsv_wot": "NULL",
+                    "vts_existencias_tienda_gsv_iva": "NULL",
+                    "vts_existencias_tienda_gsv_ieps": "NULL",
+                    "vts_existencias_tienda_gsv_wot": "NULL",
+                    "customer_sap": "315973"
+                }
+
+                # Assign constant values to DataFrame
+                for col_name, value in constant_values.items():
+                    df_combined[col_name] = value
+
+                # Convert ALL numeric columns to integers (no decimals)
+                numeric_columns_to_int = [
+                    'id_dimcadena', 'dimproductos_clvCliente', 'dimproductos_upc', 'dimproductos_numArticulo',
+                    'dimproductos_oculto', 'hash_dimtiendas', 'dimtiendas_numTienda', 'vts_piezas',
+                    'vts_importe_real', 'vts_costo_real', 'vts_cajas', 'vts_existencias_tienda_piezas',
+                    'vts_existencias_transito_piezas', 'vts_existencias_cedis_piezas',
+                    'vts_existencias_ordenado_piezas', 'id_canal', 'vts_existencias_transferencia_piezas',
+                    'id_taxescase', 'vts_importe_real_wt', 'vts_importe_real_iva', 'vts_importe_real_ieps',
+                    'vts_importe_real_wot', 'vts_gsv_wt', 'vts_gsv_iva', 'vts_gsv_ieps', 'vts_gsv_wot',
+                    'vts_existencias_tienda_gsv_iva', 'vts_existencias_tienda_gsv_ieps',
+                    'vts_existencias_tienda_gsv_wot', 'customer_sap'
+                ]
+                for col in numeric_columns_to_int:
+                    if col in df_combined.columns:
+                        df_combined[col] = pd.to_numeric(df_combined[col], errors='coerce').astype('Int64')
+                
+
+                column_order = [
+                    "id_dimcadena",
+                    "dimtiendas_cadenanombre",
+                    "dimproductos_clvCliente",
+                    "dimproductos_upc",
+                    "dimproductos_numArticulo",
+                    "dimproductos_oculto",
+                    "hash_dimtiendas",
+                    "dimtiendas_numTienda",
+                    "dimtiendas_nomTienda",
+                    "dimtiendas_formato",
+                    "dimlineastiendas_CURT",
+                    "dimtiempo_date",
+                    "moneda",
+                    "vts_piezas",
+                    "vts_importe_real",
+                    "vts_costo_real",
+                    "vts_cajas",
+                    "vts_ajuste_mensual",
+                    "vts_existencias_tienda_piezas",
+                    "vts_existencias_transito_piezas",
+                    "vts_existencias_cedis_piezas",
+                    "vts_existencias_ordenado_piezas",
+                    "id_canal",
+                    "vts_existencias_transferencia_piezas",
+                    "id_taxescase",
+                    "vts_importe_real_wt",
+                    "vts_importe_real_iva",
+                    "vts_importe_real_ieps",
+                    "vts_importe_real_wot",
+                    "lpv",
+                    "vts_lpv_wt",
+                    "vts_lpv_iva",
+                    "vts_lpv_ieps",
+                    "vts_lpv_wot",
+                    "vts_existencias_tienda_lpv_wt",
+                    "vts_existencias_tienda_lpv_iva",
+                    "vts_existencias_tienda_lpv_ieps",
+                    "vts_existencias_tienda_lpv_wot",
+                    "vts_gsv_wt",
+                    "vts_gsv_iva",
+                    "vts_gsv_ieps",
+                    "vts_gsv_wot",
+                    "vts_existencias_tienda_gsv_iva",
+                    "vts_existencias_tienda_gsv_ieps",
+                    "vts_existencias_tienda_gsv_wot",
+                    "customer_sap"
+                ]
+                
+                # Reorder columns according to the specified order
+                df_combined = df_combined[column_order]
+                
+                # Generate filename with current date
+                current_date = datetime.now().strftime("%Y%m%d")
+                text_filename = f"EMBONOR_CL_SELLOUT_INCRE_DIALY90_{current_date}.txt"
+
+                # Create file path
+                file_path = os.path.join(directory_path, text_filename)
+
+                # Save the file with pipe separator
+                df_combined.to_csv(file_path, sep='|', index=False, encoding='utf-8')
+
+            else:
+                print(f"Error downloading store data: {response_store.status_code} - {response_store.text}")
+        else:
+            print(f"Error downloading sales data: {response_sales.status_code} - {response_sales.text}")
+    except FileNotFoundError as e:
+        print(f"Error: Excel file not found at path: {excel_path}. Verify the path and file existence. Details: {e}")
+    except PermissionError as e:
+        print(f"Permission error: Cannot access the Excel file. Check folder permissions or run as administrator. Details: {e}")
+    except Exception as e:
+        print(f"General error loading the Excel file: {e}")
+
+# Define your bearer token here
+bearer_token = "XXXX"
+
+# Data to download sales (with dates)
+download_and_save_data(
+    api_url_sales="http://XXXXXX/API_Diageo/api/Sales",
+    api_url_store="http://XXXXXX/API_Diageo/api/Store",
+    bearer_token=bearer_token,
+    directory_path=r"F:\Embonor\EMBONOR"
+)
