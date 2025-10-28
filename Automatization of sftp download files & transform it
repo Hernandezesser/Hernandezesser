@@ -1,0 +1,127 @@
+import os
+import shutil
+import zipfile
+import pandas as pd
+import pysftp
+
+def download_last_n_files(host, username, password, remote_path, local_path, n):
+    cnopts = pysftp.CnOpts()
+    cnopts.hostkeys = None  # Disable host key checking for simplicity
+    try:
+        with pysftp.Connection(host, username=username, password=password, cnopts=cnopts) as sftp:
+            print(f"Connected to {host}")
+            sftp.chdir(remote_path)
+            files_on_remote = sorted(sftp.listdir(), key=lambda x: sftp.stat(x).st_mtime, reverse=True)
+            files_to_download = files_on_remote[:n]
+            
+            os.makedirs(local_path, exist_ok=True)
+            for file_to_download in files_to_download:
+                remote_file_path = f"{remote_path}/{file_to_download}"
+                local_file_path = f"{local_path}/{file_to_download}"
+                try:
+                    sftp.get(remote_file_path, local_file_path)
+                    print(f"Downloaded: {file_to_download}")
+                except Exception as e:
+                    print(f"Error downloading {file_to_download}: {e}")
+    except Exception as e:
+        print(f"SFTP connection error: {e}")
+
+def rename_files_in_folder(source_folder, destination_folder):
+    os.makedirs(destination_folder, exist_ok=True)
+    for filename in os.listdir(source_folder):
+        name, ext = os.path.splitext(filename)
+        if len(name + ext) > 14:
+            new_name = (name + ext)[:-18]
+            old_file = os.path.join(source_folder, filename)
+            new_file = os.path.join(destination_folder, new_name)
+            shutil.move(old_file, new_file)
+            print(f'Renamed and moved: {filename} to {new_name}')
+        else:
+            print(f'Skipped: {filename} (length of name and extension is less than or equal to 14 characters)')
+
+def unzip_and_rename_first(source_folder, destination_folder):
+    os.makedirs(destination_folder, exist_ok=True)
+    for filename in os.listdir(source_folder):
+        if filename.endswith(".zip"):
+            zip_path = os.path.join(source_folder, filename)
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(destination_folder)
+                extracted_files = zip_ref.namelist()
+                for extracted_file in extracted_files:
+                    old_file_path = os.path.join(destination_folder, extracted_file)
+                    if os.path.isfile(old_file_path):
+                        new_filename = extracted_file[:-14] if len(extracted_file) > 14 else extracted_file
+                        new_file_path = os.path.join(destination_folder, new_filename)
+                        os.rename(old_file_path, new_file_path)
+                        print(f"Archivo renombrado: {extracted_file} -> {new_filename}")
+    print("Primer descompresión y renombrado completado.")
+
+def unzip_and_rename_second(source_folder, destination_folder):
+    os.makedirs(destination_folder, exist_ok=True)
+    txt_files = ["CLIENTES.txt", "DOCUMENTOS.txt", "INVENTARIOS.txt", "PRODUCTOS.txt", "VENDEDORES.txt"]
+    zip_count = 0
+    for filename in os.listdir(source_folder):
+        if filename.endswith(".zip") and zip_count < 12:
+            zip_path = os.path.join(source_folder, filename)
+            zip_name = os.path.splitext(filename)[0]
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(destination_folder)
+                for txt_file in txt_files:
+                    old_file_path = os.path.join(destination_folder, txt_file)
+                    if os.path.exists(old_file_path):
+                        new_filename = f"{os.path.splitext(txt_file)[0]}_{zip_name}.txt"
+                        new_file_path = os.path.join(destination_folder, new_filename)
+                        os.rename(old_file_path, new_file_path)
+                        print(f"Archivo renombrado: {txt_file} -> {new_filename}")
+            zip_count += 1
+    print(f"Segunda descompresión completada. Se procesaron {zip_count} archivos zip.")
+
+def merge_txt_to_excel(source_folder, destination_folder):
+    output_excel = os.path.join(destination_folder, "combined_documents.xlsx")
+    os.makedirs(destination_folder, exist_ok=True)
+    all_dfs = []
+    for filename in os.listdir(source_folder):
+        if filename.startswith("DOCUMENTOS") and filename.endswith(".txt"):
+            file_path = os.path.join(source_folder, filename)
+            df = pd.read_csv(file_path, delimiter="|", header=None, encoding='utf-8')
+            df['archivo'] = filename
+            all_dfs.append(df)
+    if all_dfs:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        combined_df.to_excel(output_excel, index=False, engine='openpyxl')
+        print(f"Archivo Excel generado en: {output_excel}")
+    else:
+        print("No se encontraron archivos de texto que comiencen con 'DOCUMENTOS'.")
+
+def main():
+    # Configuración de rutas y parámetros
+    sftp_host = "XXXX"
+    sftp_username = "XXXX"
+    sftp_password = "XXXX"
+    remote_path = "/inbound/archive"
+    download_folder = r"C:\Users\HernaGab1\Desktop\Container\descarga"
+    renamed_folder = r"C:\Users\HernaGab1\Desktop\Container\renamed"
+    unzipped_folder = r"C:\Users\HernaGab1\Desktop\Container\unzipped"
+    unzipped2_folder = r"C:\Users\HernaGab1\Desktop\Container\unzipped 2"
+    excel_folder = r"C:\Users\HernaGab1\Desktop\Container\amend_sales_in_excel_file"
+    num_last_files = 12
+
+    # Ejecutar cada tarea en orden
+    print("Iniciando descarga de archivos desde SFTP...")
+    download_last_n_files(sftp_host, sftp_username, sftp_password, remote_path, download_folder, num_last_files)
+    
+    print("\nRenombrando archivos descargados...")
+    rename_files_in_folder(download_folder, renamed_folder)
+    
+    print("\nRealizando primera descompresión y renombrado...")
+    unzip_and_rename_first(renamed_folder, unzipped_folder)
+    
+    print("\nRealizando segunda descompresión y renombrado...")
+    unzip_and_rename_second(unzipped_folder, unzipped2_folder)
+    
+    print("\nUniendo archivos DOCUMENTOS en Excel...")
+    merge_txt_to_excel(unzipped2_folder, excel_folder)
+
+if __name__ == "__main__":
+    main()
+    print("\n¡Todas las tareas han sido completadas!")
