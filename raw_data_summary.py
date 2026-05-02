@@ -5,8 +5,8 @@ from pathlib import Path
 # ===================================================================
 # CONFIGURACIÓN
 # ===================================================================
-CARPETA_ARCHIVOS = r"\\AZEUNLIHP001\Teamcore\Archive"
-CARPETA_SALIDA   = r"C:\Users\HernaGab1\OneDrive - Diageo\Desktop\Auto_1\Resumen_Crudo"
+CARPETA_ARCHIVOS = r"XXXXXXXXXXXX"
+CARPETA_SALIDA   = r"C:XXXXXXXX"
 
 CANTIDAD_ULTIMOS_ARCHIVOS = 15
 
